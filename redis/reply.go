@@ -3,6 +3,8 @@ package redis
 import (
 	"errors"
 	"strconv"
+
+	"fmt"
 )
 
 //* Reply
@@ -28,6 +30,7 @@ const (
 	NilReply
 	BulkReply
 	MultiReply
+	MoveReply
 )
 
 // Reply holds a Redis reply.
@@ -139,6 +142,7 @@ func (r *Reply) List() ([]string, error) {
 
 	strings := make([]string, len(r.Elems))
 	for i, v := range r.Elems {
+		fmt.Println(v.Type)
 		if v.Type == BulkReply {
 			strings[i] = string(v.buf)
 		} else if v.Type == NilReply {

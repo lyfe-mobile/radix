@@ -150,6 +150,9 @@ func (c *Client) parse() (r *Reply) {
 		r.Type = ErrorReply
 		if bytes.HasPrefix(b, []byte("LOADING")) {
 			r.Err = LoadingError
+		} else if bytes.HasPrefix(b, []byte("MOVED")){
+			r.Type = MoveReply
+			r.buf = b
 		} else {
 			r.Err = errors.New(string(b))
 		}
@@ -199,6 +202,7 @@ func (c *Client) parse() (r *Reply) {
 	case '*':
 		// multi bulk reply
 		i, err := strconv.Atoi(string(b))
+		println("here", i)
 		if err != nil {
 			r.Type = ErrorReply
 			r.Err = ParseError

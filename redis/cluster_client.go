@@ -4,8 +4,6 @@ import (
 		"strconv"
 		"math/rand"
 		"strings"
-		//"fmt"
-		//"encoding/hex"
 	)
 
 type crcTable [256]uint16
@@ -30,7 +28,7 @@ func checkSum(val []byte, t *crcTable) uint16 {
 
 type ClusterRedis struct {
 	slotMap [TOTAL_SLOTS]*Shard
-	nodeMap []*Client
+	nodeMap map[string]*Client
 }
 
 type Shard struct {
@@ -47,12 +45,18 @@ func (c *ClusterRedis) closeConns() {
 	for i := 0; i < TOTAL_SLOTS; i++ {
 		c.slotMap[i] = nil
 	}
+
+	c.nodeMap = nil
 }
 
 func (c *ClusterRedis) refreshMap() {
-	
-	cli := c.nodeMap[0]
-	var nodeMap []*Client
+	var cli *Client
+	for _, c := range c.nodeMap{
+		cli = c
+		break
+	}
+
+	nodeMap := make(map[string]*Client)
 	var slotMap [TOTAL_SLOTS]*Shard
 	reply := cli.Cmd("cluster", "slots")
 	elems := reply.Elems
@@ -72,7 +76,7 @@ func (c *ClusterRedis) refreshMap() {
 
 			hostString := hostIP + ":" + strconv.Itoa(hostPort)
 			hostClient, _ := Dial("tcp", hostString)
-			nodeMap = append(nodeMap, hostClient)
+			nodeMap[hostString] = hostClient
 			
 			if i == 2 { //master node
 				shard.master = hostClient
@@ -97,9 +101,10 @@ func (c *ClusterRedis) refreshMap() {
 
 func DialCluster(nodes []string) (c *ClusterRedis, err error) {
 	c = new(ClusterRedis)
+	c.nodeMap = make(map[string]*Client, len(nodes))
 	for _, n := range nodes {
 		cli, _ := Dial("tcp", n)
-		c.nodeMap = append(c.nodeMap, cli)
+		c.nodeMap[n] = cli
 	}
 	c.refreshMap()
 
@@ -118,7 +123,6 @@ func computeSlot(key string) int {
 
 func (c *ClusterRedis) getSlot(key string) (cli *Client) {
 	idx := computeSlot(key)
-	println("idx", idx)
 	shard := c.slotMap[idx]
 	cliIdx := rand.Intn(len(shard.allClis))
 	cli = shard.allClis[cliIdx]
@@ -128,7 +132,7 @@ func (c *ClusterRedis) getSlot(key string) (cli *Client) {
 
 func (c *ClusterRedis) Cmd(cmd string, args ...interface{}) (reply *Reply) {
 	idx := computeSlot(args[0].(string))
-	shard := c.slotMap[idx + 10000]
+	shard := c.slotMap[idx]
 	cli := shard.master
 	reply = cli.Cmd(cmd, args)
 	println(reply.String())
@@ -140,8 +144,14 @@ func (c *ClusterRedis) Cmd(cmd string, args ...interface{}) (reply *Reply) {
 	} 
 
 	if  reply.Type == AskReply {
-		elems := strings.Split(reply.Str(), " ", -1)
-		hostArr := strings.Split(elems[2], ":", -1)
+		resp, err := reply.Str()
+		if err != nil {
+			return
+		}
+		elems := strings.Split(resp, " ")
+		cli = c.nodeMap[elems[2]]
+		cli.Cmd("ASKING")
+		reply = cli.Cmd(cmd, args)		
 
 
 	}

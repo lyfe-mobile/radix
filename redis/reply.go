@@ -3,8 +3,6 @@ package redis
 import (
 	"errors"
 	"strconv"
-
-	"fmt"
 )
 
 //* Reply
@@ -31,6 +29,7 @@ const (
 	BulkReply
 	MultiReply
 	MoveReply
+	AskReply
 )
 
 // Reply holds a Redis reply.
@@ -142,7 +141,6 @@ func (r *Reply) List() ([]string, error) {
 
 	strings := make([]string, len(r.Elems))
 	for i, v := range r.Elems {
-		fmt.Println(v.Type)
 		if v.Type == BulkReply {
 			strings[i] = string(v.buf)
 		} else if v.Type == NilReply {
@@ -233,6 +231,8 @@ func (r *Reply) String() string {
 	case StatusReply:
 		fallthrough
 	case BulkReply:
+		return string(r.buf)
+	case MoveReply:
 		return string(r.buf)
 	case IntegerReply:
 		return strconv.FormatInt(r.int, 10)

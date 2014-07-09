@@ -4,6 +4,8 @@ import (
 		"strconv"
 		"math/rand"
 		"strings"
+		"fmt"
+		"io"
 	)
 
 type crcTable [256]uint16
@@ -39,7 +41,9 @@ type Shard struct {
 
 func (c *ClusterRedis) closeConns() {
 	for _, conn := range c.nodeMap {
-		conn.Close()
+		if conn != nil {
+			conn.Close()
+		}
 	}
 
 	for i := 0; i < TOTAL_SLOTS; i++ {
@@ -51,14 +55,21 @@ func (c *ClusterRedis) closeConns() {
 
 func (c *ClusterRedis) refreshMap() {
 	var cli *Client
-	for _, c := range c.nodeMap{
-		cli = c
+	for addr, _ := range c.nodeMap{
+		var err error
+		cli, err = Dial("tcp", addr)
+		if err != nil || cli == nil {
+			continue
+		}
+		fmt.Println(cli.conn.RemoteAddr())
 		break
+
 	}
 
 	nodeMap := make(map[string]*Client)
 	var slotMap [TOTAL_SLOTS]*Shard
 	reply := cli.Cmd("cluster", "slots")
+	fmt.Println("reply", reply)
 	elems := reply.Elems
 
 	for _, e := range elems {
@@ -135,9 +146,20 @@ func (c *ClusterRedis) Cmd(cmd string, args ...interface{}) (reply *Reply) {
 	shard := c.slotMap[idx]
 	cli := shard.master
 	reply = cli.Cmd(cmd, args)
-	println(reply.String())
-
+	i := 0
+	for reply.Type == ErrorReply && i < len(shard.slaves) {
+		_, err := reply.Str()
+		if err == io.EOF {
+			cli = shard.slaves[i]
+			//fmt.Println("slave check", cli.conn.RemoteAddr())
+			reply = cli.Cmd(cmd, args)
+			i++
+		}
+			
+	}
+	
 	for reply.Type == MoveReply {
+		//fmt.Println(reply)
 		c.refreshMap()
 		cli := c.getSlot(args[0].(string))
 		reply = cli.Cmd(cmd, args)

@@ -5,7 +5,7 @@ import (
 		"math/rand"
 		"strings"
 		"fmt"
-		"io"
+		"errors"
 	)
 
 type crcTable [256]uint16
@@ -136,28 +136,23 @@ func (c *ClusterRedis) getSlot(key string) (cli *Client) {
 	idx := computeSlot(key)
 	shard := c.slotMap[idx]
 	cliIdx := rand.Intn(len(shard.allClis))
-	cli = shard.allClis[cliIdx]
+	
+	for i:= cliIdx; cli == nil && i < cliIdx + len(shard.allClis); i++ {
+		cli = shard.allClis[cliIdx]
+	}
 	return cli
 
 }
 
 func (c *ClusterRedis) Cmd(cmd string, args ...interface{}) (reply *Reply) {
-	idx := computeSlot(args[0].(string))
-	shard := c.slotMap[idx]
-	cli := shard.master
-	reply = cli.Cmd(cmd, args)
-	i := 0
-	for reply.Type == ErrorReply && i < len(shard.slaves) {
-		_, err := reply.Str()
-		if err == io.EOF {
-			cli = shard.slaves[i]
-			//fmt.Println("slave check", cli.conn.RemoteAddr())
-			reply = cli.Cmd(cmd, args)
-			i++
-		}
-			
+	cli := c.getSlot(args[0].(string))
+	if cli == nil {
+		reply = new(Reply)
+		reply.Err = errors.New("No connections found")
+		return
 	}
-	
+	reply = cli.Cmd(cmd, args)
+
 	for reply.Type == MoveReply {
 		//fmt.Println(reply)
 		c.refreshMap()

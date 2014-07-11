@@ -14,7 +14,7 @@ func TestCmd(t *testing.T) {
 	v = c.Cmd("get", "hello")
 	retVal, err := v.Str()
 	if err != nil {
-		t.Error("Failure", err, v)
+		t.Error("Failure", err)
 		return
 	}
 

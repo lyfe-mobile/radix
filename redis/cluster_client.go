@@ -19,6 +19,14 @@ var (
 
 )
 
+type ConnWrapper struct {
+	addr string
+}
+
+func (cw *ConnWrapper) InitConn() (interface{}, error) {
+	return Dial("tcp", cw.addr)
+}
+
 func checkSum(val []byte, t *crcTable) uint16 {
 	var crc uint16
 	for _, b := range val {
@@ -30,13 +38,13 @@ func checkSum(val []byte, t *crcTable) uint16 {
 
 type ClusterRedis struct {
 	slotMap [TOTAL_SLOTS]*Shard
-	nodeMap map[string]*Client
+	nodeMap map[string]*ConnectionPoolWrapper
 }
 
 type Shard struct {
-	master *Client
-	slaves []*Client
-	allClis []*Client
+	master *ConnectionPoolWrapper
+	slaves []*ConnectionPoolWrapper
+	allClis []*ConnectionPoolWrapper
 }
 
 func (c *ClusterRedis) closeConns() {
@@ -66,7 +74,7 @@ func (c *ClusterRedis) refreshMap() {
 
 	}
 
-	nodeMap := make(map[string]*Client)
+	nodeMap := make(map[string]*ConnectionPoolWrapper)
 	var slotMap [TOTAL_SLOTS]*Shard
 	reply := cli.Cmd("cluster", "slots")
 	fmt.Println("reply", reply)
@@ -86,15 +94,18 @@ func (c *ClusterRedis) refreshMap() {
 			hostIP, _ = host.Elems[0].Str()
 
 			hostString := hostIP + ":" + strconv.Itoa(hostPort)
-			hostClient, _ := Dial("tcp", hostString)
-			nodeMap[hostString] = hostClient
+			var dbPool = new(ConnectionPoolWrapper)
+			cw := &ConnWrapper{addr: hostString}
+			dbPool.InitPool(20, cw.InitConn)
+			//hostClient, _ := Dial("tcp", hostString)
+			nodeMap[hostString] = dbPool
 			
 			if i == 2 { //master node
-				shard.master = hostClient
+				shard.master = dbPool
 			} else {
-				shard.slaves = append(shard.slaves, hostClient)
+				shard.slaves = append(shard.slaves, dbPool)
 			}
-			shard.allClis = append(shard.allClis, hostClient)
+			shard.allClis = append(shard.allClis, dbPool)
 
 		}
 
@@ -112,10 +123,13 @@ func (c *ClusterRedis) refreshMap() {
 
 func DialCluster(nodes []string) (c *ClusterRedis, err error) {
 	c = new(ClusterRedis)
-	c.nodeMap = make(map[string]*Client, len(nodes))
+	c.nodeMap = make(map[string]*ConnectionPoolWrapper, len(nodes))
 	for _, n := range nodes {
-		cli, _ := Dial("tcp", n)
-		c.nodeMap[n] = cli
+		cw := &ConnWrapper{addr: n}
+		pool := new(ConnectionPoolWrapper)
+		pool.InitPool(20, cw.InitConn)
+		//pool, _ := cw.InitConn()
+		c.nodeMap[n] = pool
 	}
 	c.refreshMap()
 
@@ -136,11 +150,12 @@ func (c *ClusterRedis) getSlot(key string) (cli *Client) {
 	idx := computeSlot(key)
 	shard := c.slotMap[idx]
 	cliIdx := rand.Intn(len(shard.allClis))
-	
+	var pool *ConnectionPoolWrapper
 	for i:= cliIdx; cli == nil && i < cliIdx + len(shard.allClis); i++ {
-		cli = shard.allClis[cliIdx]
+		pool = shard.allClis[cliIdx]
 	}
-	return cli
+	cli = pool.GetConnection().(*Client)
+	return
 
 }
 
@@ -166,7 +181,7 @@ func (c *ClusterRedis) Cmd(cmd string, args ...interface{}) (reply *Reply) {
 			return
 		}
 		elems := strings.Split(resp, " ")
-		cli = c.nodeMap[elems[2]]
+		cli = c.nodeMap[elems[2]].GetConnection().(*Client)
 		cli.Cmd("ASKING")
 		reply = cli.Cmd(cmd, args)		
 

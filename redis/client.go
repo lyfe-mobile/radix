@@ -7,7 +7,6 @@ import (
 	"net"
 	"strconv"
 	"time"
-	"io"
 )
 
 const (

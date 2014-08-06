@@ -24,7 +24,9 @@ type ConnWrapper struct {
 }
 
 func (cw *ConnWrapper) InitConn() (interface{}, error) {
-	return Dial("tcp", cw.addr)
+	cli, err := Dial("tcp", cw.addr)
+	//cli.Cmd("READONLY")  //needed to tell slaves client is ok with stale data
+	return cli, err
 }
 
 func checkSum(val []byte, t *crcTable) uint16 {
@@ -69,7 +71,6 @@ func (c *ClusterRedis) refreshMap() {
 		if err != nil || cli == nil {
 			continue
 		}
-		fmt.Println(cli.conn.RemoteAddr())
 		break
 
 	}
@@ -77,7 +78,6 @@ func (c *ClusterRedis) refreshMap() {
 	nodeMap := make(map[string]*ConnectionPoolWrapper)
 	var slotMap [TOTAL_SLOTS]*Shard
 	reply := cli.Cmd("cluster", "slots")
-	fmt.Println("reply", reply)
 	elems := reply.Elems
 
 	for _, e := range elems {
@@ -96,7 +96,11 @@ func (c *ClusterRedis) refreshMap() {
 			hostString := hostIP + ":" + strconv.Itoa(hostPort)
 			var dbPool = new(ConnectionPoolWrapper)
 			cw := &ConnWrapper{addr: hostString}
-			dbPool.InitPool(20, cw.InitConn)
+			err := dbPool.InitPool(20, cw.InitConn)
+			if err != nil {
+				fmt.Println(err)
+				continue
+			}
 			//hostClient, _ := Dial("tcp", hostString)
 			nodeMap[hostString] = dbPool
 			
@@ -146,33 +150,42 @@ func computeSlot(key string) int {
 }
 
 
-func (c *ClusterRedis) getSlot(key string) (cli *Client) {
+func (c *ClusterRedis) getSlot(key string) (pool *ConnectionPoolWrapper) {
 	idx := computeSlot(key)
 	shard := c.slotMap[idx]
-	cliIdx := rand.Intn(len(shard.allClis))
-	var pool *ConnectionPoolWrapper
-	for i:= cliIdx; cli == nil && i < cliIdx + len(shard.allClis); i++ {
-		pool = shard.allClis[cliIdx]
+	poolIdx := rand.Intn(len(shard.allClis))
+
+	for i:= poolIdx; pool == nil && i < poolIdx + len(shard.allClis); i++ {
+		fmt.Println("idx", poolIdx)
+		pool = shard.allClis[poolIdx]
 	}
-	cli = pool.GetConnection().(*Client)
 	return
 
 }
 
 func (c *ClusterRedis) Cmd(cmd string, args ...interface{}) (reply *Reply) {
-	cli := c.getSlot(args[0].(string))
+	pool := c.getSlot(args[0].(string))
+	cli := pool.GetConnection().(*Client)
+	fmt.Println("first", cli.conn.RemoteAddr(), pool.size)
 	if cli == nil {
 		reply = new(Reply)
 		reply.Err = errors.New("No connections found")
 		return
 	}
 	reply = cli.Cmd(cmd, args)
+	pool.ReleaseConnection(cli)
 
 	for reply.Type == MoveReply {
-		//fmt.Println(reply)
 		c.refreshMap()
-		cli := c.getSlot(args[0].(string))
+		fmt.Println("move", cli.conn.RemoteAddr(), pool.size)
+		pool = c.getSlot(args[0].(string))
+		fmt.Println("move2", pool.size)
+		cli = pool.GetConnection().(*Client)
+		fmt.Println("move3")
 		reply = cli.Cmd(cmd, args)
+		fmt.Println("move4")
+		pool.ReleaseConnection(cli)
+		fmt.Println("release_move", cli.conn.RemoteAddr(), pool.size)
 	} 
 
 	if  reply.Type == AskReply {
@@ -180,10 +193,13 @@ func (c *ClusterRedis) Cmd(cmd string, args ...interface{}) (reply *Reply) {
 		if err != nil {
 			return
 		}
+
 		elems := strings.Split(resp, " ")
-		cli = c.nodeMap[elems[2]].GetConnection().(*Client)
+		pool = c.nodeMap[elems[2]]
+		cli = pool.GetConnection().(*Client)
 		cli.Cmd("ASKING")
-		reply = cli.Cmd(cmd, args)		
+		reply = cli.Cmd(cmd, args)
+		pool.ReleaseConnection(cli)
 
 
 	}
